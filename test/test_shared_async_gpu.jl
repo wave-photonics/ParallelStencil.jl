@@ -83,6 +83,15 @@ eval(:(
                 @sync_threads()
                 tn = t == N ? 1 : t + 1
                 B[t, P, b] = r[tn, (P - 1) % S + 1]
+                # a copy from a divergent branch (every 32nd lane, as the halo copies of a tiled kernel)
+                @sync_threads()
+                if t % 32 == 1
+                    @memcpy_async(r, t, A, t + N, true)
+                end
+                @memcpy_async_commit()
+                @memcpy_async_wait(0)
+                @sync_threads()
+                t % 32 == 1 && (B[t, 1, b] = r[t, 1] - A[t + N] + B[t, 1, b])
                 return
             end
             @parallel_indices (ix) function ring!(B, A, n, s, p)
