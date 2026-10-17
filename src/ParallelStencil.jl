@@ -102,6 +102,7 @@ include("FiniteDifferences.jl")
 export @init_parallel_stencil, FiniteDifferences1D, FiniteDifferences2D, FiniteDifferences3D, AD
 export @parallel, @hide_communication, @overlap, @get_priority_stream, @get_stream, @parallel_indices, @parallel_async, @synchronize, @zeros, @ones, @rand, @falses, @trues, @fill, @fill!, @CellType
 export @gridDim, @blockIdx, @blockDim, @threadIdx, @sync_threads, @sharedMem, @ps_show, @ps_println, @∀
+export @memcpy_async, @memcpy_async_commit, @memcpy_async_wait
 export @warpsize, @laneid, @active_mask, @shfl_sync, @shfl_up_sync, @shfl_down_sync, @shfl_xor_sync, @vote_any_sync, @vote_all_sync, @vote_ballot_sync
 export @select_hardware, @current_hardware, select_hardware, current_hardware
 export PSNumber

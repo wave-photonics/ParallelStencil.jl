@@ -70,6 +70,39 @@ macro sharedMem(args...) check_initialized(__module__); checkargs_sharedMem(args
 
 
 ##
+const MEMCPYASYNC_DOC = """
+    @memcpy_async(dst, di, src, si)
+    @memcpy_async(dst, di, src, si, ok)
+
+Copy the element `src[si]` of an array in global memory into the element `dst[di]` of a shared memory array (see [`@sharedMem`](@ref)) asynchronously; `di` and `si` are linear indices. The copy is issued at once and completes in the background: it is only guaranteed complete after [`@memcpy_async_commit`](@ref) has closed its group and a [`@memcpy_async_wait`](@ref) has waited for that group; a [`@sync_threads`](@ref) must follow before other threads of the block read `dst[di]`. With `ok == false` nothing is read and `dst[di]` becomes zero (the zero-filling form, for halo lanes outside an array).
+
+On CUDA this is the `cp.async` instruction (compute capability 8.0 and later), so the copies of later planes overlap the computation on earlier ones; on the other backends the copy is performed immediately and [`@memcpy_async_commit`](@ref) and [`@memcpy_async_wait`](@ref) do nothing, so the same kernel is correct on every backend.
+"""
+@doc MEMCPYASYNC_DOC
+macro memcpy_async(args...) check_initialized(__module__); checkargs_memcpy_async(args...); esc(memcpy_async(__module__, args...)); end
+
+
+##
+const MEMCPYASYNCCOMMIT_DOC = """
+    @memcpy_async_commit()
+
+Close the group of the [`@memcpy_async`](@ref) copies the thread issued since its last commit (see [`@memcpy_async_wait`](@ref)).
+"""
+@doc MEMCPYASYNCCOMMIT_DOC
+macro memcpy_async_commit(args...) check_initialized(__module__); checknoargs(args...); esc(memcpy_async_commit(__module__, args...)); end
+
+
+##
+const MEMCPYASYNCWAIT_DOC = """
+    @memcpy_async_wait(n)
+
+Wait until at most `n` of the thread's committed groups of [`@memcpy_async`](@ref) copies are still in flight; `n` must be a compile-time constant (an integer literal or an expression of type parameters).
+"""
+@doc MEMCPYASYNCWAIT_DOC
+macro memcpy_async_wait(args...) check_initialized(__module__); checksinglearg(args...); esc(memcpy_async_wait(__module__, args...)); end
+
+
+##
 const PKSHOW_DOC = """
     @pk_show(...)
 
@@ -269,6 +302,10 @@ function checksinglearg(args...)
     if (length(args) != 1) @ArgumentError("wrong number of arguments.") end
 end
 
+function checkargs_memcpy_async(args...)
+    if !(4 <= length(args) <= 5) @ArgumentError("wrong number of arguments.") end
+end
+
 function checkargs_sharedMem(args...)
     if !(2 <= length(args) <= 3) @ArgumentError("wrong number of arguments.") end
 end
@@ -377,6 +414,35 @@ macro sharedMem_kernelabstractions(args...)
         return esc(:(KernelAbstractions.@localmem($(args[1]), $(args[2]))))
     end
     return esc(:(ParallelStencil.ParallelKernel.@sharedMem_kernelabstractions($(args[1]), $(args[2]))))
+end
+
+## FUNCTIONS FOR ASYNCHRONOUS COPIES TO SHARED MEMORY
+
+function memcpy_async(caller::Module, dst, di, src, si, ok=true; package::Symbol=get_package(caller))
+    if     (package == PKG_CUDA)    return :(ParallelStencil.ParallelKernel.memcpy_async_cuda!($dst, $di, $src, $si, $ok))
+    elseif (package in SUPPORTED_PACKAGES) return :(ParallelStencil.ParallelKernel.memcpy_async_sync!($dst, $di, $src, $si, $ok))
+    else                            @KeywordArgumentError("$ERRMSG_UNSUPPORTED_PACKAGE (obtained: $package).")
+    end
+end
+
+function memcpy_async_commit(caller::Module, args...; package::Symbol=get_package(caller))
+    if     (package == PKG_CUDA)    return :(ParallelStencil.ParallelKernel.memcpy_async_commit_cuda())
+    elseif (package in SUPPORTED_PACKAGES) return :(nothing)
+    else                            @KeywordArgumentError("$ERRMSG_UNSUPPORTED_PACKAGE (obtained: $package).")
+    end
+end
+
+function memcpy_async_wait(caller::Module, n; package::Symbol=get_package(caller))
+    if     (package == PKG_CUDA)    return :(ParallelStencil.ParallelKernel.memcpy_async_wait_cuda(Val($n)))
+    elseif (package in SUPPORTED_PACKAGES) return :(nothing)
+    else                            @KeywordArgumentError("$ERRMSG_UNSUPPORTED_PACKAGE (obtained: $package).")
+    end
+end
+
+# the copy performed immediately (every backend but CUDA): nothing is read when `ok` is false
+@inline function memcpy_async_sync!(dst, di, src, si, ok)
+    @inbounds dst[di] = ok ? src[si] : zero(eltype(dst))
+    return nothing
 end
 
 ## FUNCTIONS FOR PRINTING
