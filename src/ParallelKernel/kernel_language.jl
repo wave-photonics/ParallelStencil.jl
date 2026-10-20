@@ -365,7 +365,7 @@ end
 
 macro sharedMem_amdgpu(T, dims) esc(:(AMDGPU.@ROCDynamicLocalArray($T, $dims, false))) end
 
-macro sharedMem_amdgpu(T, dims, offset) esc(:(ParallelStencil.ParallelKernel.@sharedMem_amdgpu($T, $dims))) end
+macro sharedMem_amdgpu(T, dims, offset) esc(:(AMDGPU.@ROCDynamicLocalArray($T, $dims, false, $offset))) end
 
 macro sharedMem_metal(T, dims) :(Metal.MtlThreadGroupArray($T, $dims)); end
 

@@ -394,6 +394,29 @@ eval(:(
                     @test B == A
                 end
             end;
+            @testset "@sharedMem (offsets)" begin
+                @static if @iscpu($package) || $package in ($PKG_CUDA, $PKG_AMDGPU)
+                    A  = @rand(32,4)
+                    B1 = @zeros(32,4)
+                    B2 = @zeros(32,4)
+                    @parallel_indices (ix,iy) function twocopies!(B1, B2, A)
+                        tx   = @threadIdx().x
+                        ty   = @threadIdx().y
+                        nl   = @blockDim().x*@blockDim().y
+                        A_l1 = @sharedMem(eltype(A), (@blockDim().x, @blockDim().y))
+                        A_l2 = @sharedMem(eltype(A), (@blockDim().x, @blockDim().y), nl*sizeof(eltype(A)))  # Must not overlap A_l1.
+                        A_l1[tx,ty] = A[ix,iy]
+                        A_l2[tx,ty] = 2*A[ix,iy]
+                        @sync_threads()
+                        B1[ix,iy] = A_l1[tx,ty]
+                        B2[ix,iy] = A_l2[tx,ty]
+                        return
+                    end
+                    @parallel (1,1,1) (32,4,1) shmem=2*32*4*sizeof(eltype(A)) twocopies!(B1, B2, A);
+                    @test Array(B1) == Array(A)
+                    @test Array(B2) == 2 .* Array(A)
+                end
+            end;
             @testset "@∀" begin
                 expansion = @prettystring(1, @∀ i ∈ (x,z) @all(C.i) = @all(A.i) + @all(B.i))
                 @test occursin("@all(C.x) = @all(A.x) + @all(B.x)", expansion)
