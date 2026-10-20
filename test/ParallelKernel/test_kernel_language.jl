@@ -3,7 +3,7 @@ import ParallelStencil
 using ParallelStencil.ParallelKernel
 import ParallelStencil.ParallelKernel: @reset_parallel_kernel, @is_initialized, SUPPORTED_PACKAGES, PKG_CUDA, PKG_AMDGPU, PKG_METAL, PKG_THREADS, PKG_POLYESTER, PKG_KERNELABSTRACTIONS
 import ParallelStencil.ParallelKernel: @require, @prettystring, @iscpu, @select_hardware, @current_hardware, handle
-import ParallelStencil.ParallelKernel: checknoargs, checkargs_sharedMem, Dim3
+import ParallelStencil.ParallelKernel: checknoargs, checkargs_sharedMem, checkargs_memcpy_async, Dim3
 using ParallelStencil.ParallelKernel.Exceptions
 TEST_PACKAGES = SUPPORTED_PACKAGES
 @static if PKG_CUDA in TEST_PACKAGES
@@ -337,6 +337,37 @@ eval(:(
                     @test @prettystring(ParallelStencil.ParallelKernel.@sync_threads_cpu()) == "begin\nend"
                 end;
             end;
+            @testset "@memcpy_async" begin
+                @static if @iscpu($package) || $package in ($PKG_CUDA, $PKG_AMDGPU)
+                    A = @rand(64,10)
+                    B = @zeros(64,10)
+                    @parallel_indices (ix) function pipeline!(B, A)  # Copy column j+1 into one stage of shared memory while column j is read from the other.
+                        tx  = @threadIdx().x
+                        n   = @blockDim().x
+                        nj  = size(A,2)
+                        A_l = @sharedMem(eltype(A), (n, 2))
+                        @memcpy_async(A_l, tx, A, ix, isodd(ix))      # Copies with ok == false write zero.
+                        @memcpy_async_commit()
+                        for j = 1:nj
+                            if j < nj
+                                @memcpy_async(A_l, tx + (j%2)*n, A, ix + j*size(A,1), isodd(ix+j))
+                                @memcpy_async_commit()
+                                @memcpy_async_wait(1)
+                            else
+                                @memcpy_async_wait(0)
+                            end
+                            @sync_threads()
+                            B[ix,j] = A_l[(tx == n ? 1 : tx+1) + ((j-1)%2)*n]  # The neighbour's copy.
+                            @sync_threads()
+                        end
+                        return
+                    end
+                    @parallel (1,1,1) (64,1,1) shmem=2*64*sizeof(eltype(A)) pipeline!(B, A);
+                    neighbour(i) = @iscpu($package) ? i : mod1(i+1, 64)  # A CPU block has one thread.
+                    A_h = Array(A)
+                    @test Array(B) == [isodd(neighbour(i)+j-1) ? A_h[neighbour(i),j] : zero(eltype(A_h)) for i=1:64, j=1:10]
+                end
+            end;
             @testset "shared memory (allocation)" begin
                 @static if @iscpu($package)
                     @test typeof(@sharedMem($FloatDefault,(2,3))) == typeof(ParallelStencil.ParallelKernel.MArray{Tuple{2,3},   $FloatDefault, length((2,3)),   prod((2,3))}(undef))
@@ -424,6 +455,10 @@ eval(:(
                 @test_throws ArgumentError checkargs_sharedMem();                                                        # Error: isempty(args)
                 @test_throws ArgumentError checkargs_sharedMem(:(something));                                            # Error: length(args) != 2
                 @test_throws ArgumentError checkargs_sharedMem(:(something), :(something), :(something), :(something));  # Error: length(args) != 2
+            end;
+            @testset "arguments @memcpy_async" begin
+                @test_throws ArgumentError checkargs_memcpy_async(:(something), :(something), :(something));                                         # Error: length(args) < 4
+                @test_throws ArgumentError checkargs_memcpy_async(:(something), :(something), :(something), :(something), :(something), :(something));  # Error: length(args) > 5
             end;
             @reset_parallel_kernel()
         end;

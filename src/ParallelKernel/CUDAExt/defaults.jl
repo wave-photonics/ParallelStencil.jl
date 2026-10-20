@@ -8,6 +8,13 @@ function get_custream end
 function get_cuda_compute_capability end
 
 
+# kernel_language.jl
+
+memcpy_async_cuda!(arg...)        = @NotLoadedError(ERRMSG_CUDAEXT_NOT_LOADED)
+memcpy_async_commit_cuda(arg...)  = @NotLoadedError(ERRMSG_CUDAEXT_NOT_LOADED)
+memcpy_async_wait_cuda(arg...)    = @NotLoadedError(ERRMSG_CUDAEXT_NOT_LOADED)
+
+
 # select_hardware.jl
 
 handle_kernelabstractions_cuda(arg...)  = @NotLoadedError(ERRMSG_CUDAEXT_NOT_LOADED)
