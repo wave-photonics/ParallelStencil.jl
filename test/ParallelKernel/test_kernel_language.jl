@@ -368,6 +368,29 @@ eval(:(
                     @test Array(B) == [isodd(neighbour(i)+j-1) ? A_h[neighbour(i),j] : zero(eltype(A_h)) for i=1:64, j=1:10]
                 end
             end;
+            @testset "@memcpy_async (divergent branch)" begin
+                @static if @iscpu($package) || $package in ($PKG_CUDA, $PKG_AMDGPU)
+                    A = @rand(64)
+                    B = @zeros(64)
+                    @parallel_indices (ix) function some_lanes!(B, A)  # Copies issued by some lanes only.
+                        tx  = @threadIdx().x
+                        A_l = @sharedMem(eltype(A), @blockDim().x)
+                        A_l[tx] = zero(eltype(A))
+                        @sync_threads()
+                        if tx % 32 == 1
+                            @memcpy_async(A_l, tx, A, ix)
+                        end
+                        @memcpy_async_commit()
+                        @memcpy_async_wait(0)
+                        @sync_threads()
+                        B[ix] = A_l[tx]
+                        return
+                    end
+                    @parallel (1,1,1) (64,1,1) shmem=64*sizeof(eltype(A)) some_lanes!(B, A);
+                    A_h = Array(A)
+                    @test Array(B) == [(@iscpu($package) || i % 32 == 1) ? A_h[i] : zero(eltype(A_h)) for i=1:64]  # A CPU block has one thread: it copies.
+                end
+            end;
             @testset "shared memory (allocation)" begin
                 @static if @iscpu($package)
                     @test typeof(@sharedMem($FloatDefault,(2,3))) == typeof(ParallelStencil.ParallelKernel.MArray{Tuple{2,3},   $FloatDefault, length((2,3)),   prod((2,3))}(undef))

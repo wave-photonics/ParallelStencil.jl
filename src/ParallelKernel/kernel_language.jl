@@ -76,7 +76,7 @@ const MEMCPYASYNC_DOC = """
 
 Copy the element `src[si]` of an array in global memory into the element `dst[di]` of a shared memory array (see [`@sharedMem`](@ref)) asynchronously; `di` and `si` are linear indices. The copy is issued at once and completes in the background: it is only guaranteed complete after [`@memcpy_async_commit`](@ref) has closed its group and a [`@memcpy_async_wait`](@ref) has waited for that group; a [`@sync_threads`](@ref) must follow before other threads of the block read `dst[di]`. With `ok == false` nothing is read and `dst[di]` becomes zero (the zero-filling form, for halo lanes outside an array).
 
-On CUDA this is the `cp.async` instruction, which requires compute capability 8.0 or later, so that the copies of the next tile overlap the computation on the current one. On the other backends the copy is performed immediately and [`@memcpy_async_commit`](@ref) and [`@memcpy_async_wait`](@ref) do nothing.
+On CUDA this is the `cp.async` instruction, which requires compute capability 8.0 or later, so that the copies of the next tile overlap the computation on the current one. On AMDGPU, if the environment variable `PS_AMDGPU_MEMCPY_ASYNC=dma` is set when the kernel's macros expand, the copies of lanes whose shared elements follow one another in lane order go through the global-to-LDS DMA loads of the CDNA GPUs (`global_load_lds_dword`), and [`@memcpy_async_wait`](@ref) waits for all of them (whatever `n`). Otherwise, and on the other backends, the copy is performed immediately and [`@memcpy_async_commit`](@ref) and [`@memcpy_async_wait`](@ref) do nothing.
 """
 @doc MEMCPYASYNC_DOC
 macro memcpy_async(args...) check_initialized(__module__); checkargs_memcpy_async(args...); esc(memcpy_async(__module__, args...)); end
@@ -418,8 +418,13 @@ end
 
 ## FUNCTIONS FOR ASYNCHRONOUS COPIES TO SHARED MEMORY
 
+# AMDGPU: the copies through the LDS DMA (`global_load_lds_dword`, CDNA) with PS_AMDGPU_MEMCPY_ASYNC=dma when the kernel's
+# macros expand (a package's precompile cache keeps the choice), else at once
+amdgpu_lds_dma() = get(ENV, "PS_AMDGPU_MEMCPY_ASYNC", "sync") == "dma"
+
 function memcpy_async(caller::Module, dst, di, src, si, ok=true; package::Symbol=get_package(caller))
     if     (package == PKG_CUDA)    return :(ParallelStencil.ParallelKernel.memcpy_async_cuda!($dst, $di, $src, $si, $ok))
+    elseif (package == PKG_AMDGPU && amdgpu_lds_dma()) return :(ParallelStencil.ParallelKernel.memcpy_async_amdgpu_dma!($dst, $di, $src, $si, $ok))
     elseif (package in SUPPORTED_PACKAGES) return :(ParallelStencil.ParallelKernel.memcpy_async_sync!($dst, $di, $src, $si, $ok))
     else                            @KeywordArgumentError("$ERRMSG_UNSUPPORTED_PACKAGE (obtained: $package).")
     end
@@ -434,6 +439,7 @@ end
 
 function memcpy_async_wait(caller::Module, n; package::Symbol=get_package(caller))
     if     (package == PKG_CUDA)    return :(ParallelStencil.ParallelKernel.memcpy_async_wait_cuda(Val($n)))
+    elseif (package == PKG_AMDGPU && amdgpu_lds_dma()) return :(ParallelStencil.ParallelKernel.memcpy_async_wait_amdgpu_dma())
     elseif (package in SUPPORTED_PACKAGES) return :(nothing)
     else                            @KeywordArgumentError("$ERRMSG_UNSUPPORTED_PACKAGE (obtained: $package).")
     end
