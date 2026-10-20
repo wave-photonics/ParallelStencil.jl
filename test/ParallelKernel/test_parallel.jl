@@ -455,6 +455,24 @@ eval(:(
                     @test !occursin("synchronize", call)
                 end;
             end;
+            @testset "@parallel (shmem > 48 KiB)" begin
+                @static if $package == $PKG_CUDA
+                    if CUDA.attribute(CUDA.device(), CUDA.DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN) >= 64*1024
+                        A  = @rand(256, 64*1024 ÷ (256*sizeof(eltype(@zeros(1)))))  # A block holds all of A in shared memory: 64 KiB.
+                        B  = @zeros(size(A))
+                        @parallel_indices (ix) function rotate!(B, A)
+                            n   = @blockDim().x
+                            A_l = @sharedMem(eltype(A), (n, size(A,2)))
+                            for j = 1:size(A,2) A_l[ix,j] = A[ix,j] end
+                            @sync_threads()
+                            for j = 1:size(A,2) B[ix,j] = A_l[ix == n ? 1 : ix+1, j] end
+                            return
+                        end
+                        @parallel (1,1,1) (256,1,1) shmem=length(A)*sizeof(eltype(A)) rotate!(B, A);
+                        @test Array(B) == circshift(Array(A), (-1, 0))
+                    end
+                end;
+            end;
             @testset "@synchronize" begin
                 @static if $package == $PKG_CUDA
                     @test @prettystring(1, @synchronize()) == "CUDA.synchronize(; blocking = true)"

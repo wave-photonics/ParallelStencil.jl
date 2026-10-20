@@ -47,3 +47,16 @@ function ParallelStencil.ParallelKernel.get_cuda_compute_capability(default::Ver
     end
     return compute_capability
 end
+
+
+## FUNCTIONS FOR LAUNCHES
+
+function ParallelStencil.ParallelKernel.shmem_optin_cuda!(kernel, shmem::Integer)
+    if shmem > 48 * 1024
+        attributes = CUDA.attributes(kernel.fun)
+        if attributes[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] < shmem
+            attributes[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = shmem
+        end
+    end
+    return kernel
+end

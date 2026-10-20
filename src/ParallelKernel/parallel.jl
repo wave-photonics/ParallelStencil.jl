@@ -883,6 +883,19 @@ end
 function create_gpu_or_xpu_call(package::Symbol, nblocks::Union{Symbol,Expr}, nthreads::Union{Symbol,Expr}, kernelcall::Expr, backend_kwargs_expr::Array, async::Bool, stream::Union{Symbol,Expr}, shmem::Union{Symbol,Expr,Nothing}, launch::Bool, fname::Union{Symbol,Expr})
     synccall = async ? :(begin end) : create_synccall(package, stream)
     backend_kwargs_expr = (backend_kwargs_expr...,)
+    if launch && (package == PKG_CUDA) && !isnothing(shmem)
+        # CUDA refuses more than 48 KiB of dynamic shared memory unless the kernel opts in: compile the kernel (with the compile-time keyword arguments, e.g. `maxregs`), opt in, then launch it (with the launch-time ones).
+        is_launch_kwarg(e) = isa(e, Expr) && e.head in (:(=), :kw) && e.args[1] in (:blocks, :threads, :shmem, :stream, :cooperative)
+        compile_kwargs_expr = filter(e -> !is_launch_kwarg(e), collect(backend_kwargs_expr))
+        launch_kwargs_expr  = filter(is_launch_kwarg, collect(backend_kwargs_expr))
+        kernel = gensym("kernel")
+        return quote
+            local $kernel = CUDA.@cuda launch=false $(compile_kwargs_expr...) $kernelcall
+            ParallelStencil.ParallelKernel.shmem_optin_cuda!($kernel, $shmem)
+            $kernel($(kernelcall.args[2:end]...); blocks=$nblocks, threads=$nthreads, stream=$stream, shmem=$shmem, $(launch_kwargs_expr...))
+            $synccall
+        end
+    end
     if launch
         if !isnothing(shmem)
             if     (package == PKG_CUDA)   shmem_expr = :(shmem = $shmem)
